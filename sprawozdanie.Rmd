@@ -1,0 +1,444 @@
+---
+title: "Projekt I Przetwarzanie danych środowiskowych: Wybrane metody regresyjne w analizeie danych."
+subtitle: "Krzysztof Kusztykiewicz WGGIŚ Geoinformacja rok II"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+    html_document:
+      theme: dark
+      highlight: pygments
+      toc: true
+      toc_float: true
+      collapsed: false
+      smooth_scroll: false
+      number_sections: false
+      toc_depth: 3
+      self_contained: true
+      code_folding: NULL
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F, error = F, fig.align = "center", cache = T)
+```
+
+```{r Biblioteki load, include=FALSE, eval=TRUE}
+library(tidyverse)
+library(lmtest)
+library(MASS)
+library(caret)
+library(car)
+library(neuralnet)
+library(hydroGOF)
+library(gvlma)
+library(leaps)
+```
+
+------------------------------------------------------------------------
+
+# 1. Cel projektu
+
+|                                                                                                                                          |
+|------------------------------------------------------------------------|
+| Celem projektu jest zastosowanie wybranych metod regresyjnych do analizy zestawu danych, stworzenie modeli predykcyjnych oraz ich ocena. |
+
+# 2. Zestaw danych
+
+------------------------------------------------------------------------
+
+## 2.1 Pozyskanie danych
+
+|                                                                                                                                                                                                                             |
+|------------------------------------------------------------------------|
+| Dane do analizy zostay pobrane ze strony: <https://archive.ics.uci.edu/ml/datasets/concrete+compressive+strength> Strona zawiera wiele innych ciekawch zestawów danych przeznaczonych do zagadnień regresji i klasyfikacji. |
+
+## 2.2 Zestaw danych
+
+------------------------------------------------------------------------
+
+Zestaw danych *Concrate_Data.xls* zawiera nastepujace kolumny:
+
+```{r sciezka, include=FALSE}
+load(".RData")
+dt<-cement_data
+```
+
+```{r dane_head, echo=FALSE}
+head(cement_data)
+```
+
+W prowadzonych analizach będziemy rozwarzać zalerzność **wytrzymałości
+betonu** od poszczególnych składników. Warto zwrócić uwage że występuje
+także kolumna "wiek".
+
+------------------------------------------------------------------------
+
+# 3 Analiza danych
+
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## 3.1 Przegląd predyktorów
+
+------------------------------------------------------------------------
+
+Przyjrzyjmy się jak wygląda rozkład poszczególnych predyktorów w
+zależności od badanej obserwacji
+
+```{r summary, echo=TRUE}
+summary(dt)
+plot(dt$cement, dt$wytrz)
+plot(dt$popiol_lot, dt$wytrz)
+plot(dt$zuzel_wp,dt$wytrz) 
+plot(dt$super_plast, dt$wytrz)
+plot(dt$woda, dt$wytrz) 
+plot(dt$krusz_grub, dt$wytrz)
+plot(dt$wiek, dt$wytrz) #nieliniowa zaleznosc 
+plot(dt$krusz_drob, dt$wytrz)
+```
+
+Możemy zauważyć, że wartości są mocno rozproszone. Przy niektórych
+predyktorach może pojawić się problem z liniowością. Na pierwszy rzut
+oka widzimy, że zalerzność wytrzymałości od wieku na pewno nie jest
+liniowa.
+
+------------------------------------------------------------------------
+
+## 3.2 Podział zbioru danych
+
+------------------------------------------------------------------------
+
+Ze zboru danych wydzielimy zbiór treningowy i testowy w stosunku
+90%-10%. Operacja ta jest potrzebna, żeby móc lepiej zweryfikować
+otrzymywane wyniki.
+
+```{r wylosowanie, eval=FALSE, message=FALSE, include=FALSE}
+#wylosowane<-sample(c(0:nrow(dt)),size = 0.1*nrow(dt))
+testowy<-dt[wylosowane,]
+dt<-dt[-wylosowane,]
+```
+
+------------------------------------------------------------------------
+
+## 3.3 Pierwsze modele
+
+------------------------------------------------------------------------
+
+Stwwórzmy na początek trzy modele: m1 - model regresji prostej (jako
+predyktor wybieramy cement ponieważ wykres ich zależności wygląda
+obiecująco). m2 - model regreji wielorakiej z uwzględnieniem wszystkich
+czynników. m3 - model regresji wielorakiej z interakcjami.
+
+Możemy podejrzeć współczynniki np. dla modelu m2 oraz m3
+
+```{r pierwsze modele, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+m1<-lm(data = dt, formula = wytrz~cement)
+m2<-lm(data = dt, formula = wytrz~.)
+m3 <-lm(data = dt, formula = wytrz~.*.)
+summary(m1)
+summary(m2)
+summary(m3)
+```
+
+w raporcie widzimy, że wszystkie czynniki w modelu m1 są istotne (nie
+dziwi nas to ponieważ cemanet jeste jedynym predyktorem). W modelu m2
+wszystkie czynniki oprócz wyrazu wolnego odgrywają istotną rolę. Inaczej
+sytuacja przedstawia się w modelu z interakcjami - nie wszystkie są
+istone.
+
+Współczynniki R^2^:
+
+| model | R^2^   |
+|-------|--------|
+| m1    | 0.2478 |
+| m2    | 0.6155 |
+| m3    | 0.7567 |
+
+R^2^ nie jest dobrym parametrem oceny jakości modelu, ale dostarcza
+nam informacji jaka część danych jest przez niego opisywana. Na jego
+podstawie możemy odrzucić m1 jako niewystarczający.
+
+------------------------------------------------------------------------
+
+## 3.4 Porównanie pierwszych modeli
+
+------------------------------------------------------------------------
+
+Spójrzmy na wykresy diagnostyczne modeli generowane przez funkcję
+*plot()*:
+
+```{r porownanie modele 1 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+plot(m2)
+plot(m3)
+```
+
+------------------------------------------------------------------------
+
+Z wykresów diagnostycznych możemy dowiedzieć się, że:
+
+-   W obu modelach reszty nie zależą funkcyjnie od zmiennej objaśnianej
+-   Na podstawie wykresu QQ możemy podejrzewać, że będziemy mieli
+    doczynienia z problemem braku normalbościc rozkładu reszt modeli
+-   Obecność trendu na wykresach "Scale Location" sugeruje, ze wariancja
+    reszt nie będzie jednorodna co świadczy o nienajlepszym dopasowaniu
+    modeli.
+-   Na podstawie ostatniego wykresu możemy stwierdzić, że istnieją
+    wartości o dużym udziale w modelu, ale nie możemy uznać ich za
+    wartości odstające. Wartości, które znacznie odstają możnaby
+    odrzucić z modelu z załoźeniem, że i tak nie jesteśmy w stanie
+    korzystając z metod regresyjnych dobrze prognozować wartości
+    ekstremalne
+
+Obserwacje wynikające z wykresów można sprawdzić testami statystycznymi:
+
+```{r testy 1, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+# normalność reszt:
+shapiro.test(m2$residuals)
+shapiro.test(m3$residuals)
+
+# jednorodnosc wariancj
+bptest(m2)
+bgtest(m3) 
+
+# autokorelacja reszt:
+dwtest(m2)
+dwtest(m3)
+
+```
+
+Testy pokazują, że normalność reszt występuje tylko w m3, w obu modelach
+występuje niejednorodność wariancji oraz jej autokorelacja
+
+Żeby zdecydować sie na wybór modelu, z którym dalej będziemy pracować
+skorzystamy z globalnego testu z pakietu *hydroGOf*. Porównanie modeli:
+
+```{r testy 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+cbind(gof(predict(m2),dt$wytrz),gof(predict(m3),dt$wytrz))
+```
+
+Na podstawie powyższej tabeli możemy zauważyć, że model m3 cechuje się
+mnijszymi średnimi błędami i lepszym dopasowwaniem od modelu m2.
+
+Do porównania tych modeli można użyć jeszcze kryterium Schwazrza-Bayesa
+oraz kryterium Akiaikiego
+
+```{r testy 3, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+cbind(AIC(m2,m3)[2], BIC(m2,m3)[2])
+```
+
+m3 cechuje się lepszymi wynikami kryteriów oceny.
+
+------------------------------------------------------------------------
+
+## 3.5 Transformacje zmiennych
+
+------------------------------------------------------------------------
+
+Z wcześniejszych wykresów wiemy, że zależność wytrzymałości od wieku nie
+jest liniowa. Aby poprawić tą zależność skorzystamy z transformacji
+Boxa-Coxa. W pakiecie *MASS* zaimportowana jest funkcja *logtrans*,
+której użyjemy do wyboru parametru przesunięcia w transformacji
+logarytmicznej.
+
+```{r transformacje, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+dt_1 <- dt
+tmp= MASS::logtrans(wytrz~log(wiek),data = dt_1, alpha = seq(0,100,0.01))
+tmp$x[which.max(tmp$y)]
+```
+
+> Parametr alpha maksymalizujący funkcję wiarygodności alpha = 23.45
+
+Dokonujemy wiec transformacji
+
+```{r transformacje 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+dt_1[colnames(dt_1)=="wiek"]<-log(dt_1[colnames(dt_1)=="wiek"]+23.25) # log z wiek alpha = 23.25
+
+par(mfrow=c(1,2))
+plot(dt$wiek, dt$wytrz)
+plot(dt_1$wiek, dt_1$wytrz)
+```
+
+Tak wyjlądają zależności po transformacji. Poprawa jest bardzo
+nieznaczna, ale może się przyczynić do poprawy modelu.
+
+Możemy podejrzewać, że zależność wytrzymałości od ilości dodanej wody
+także jest nieliniowa użyjmy tej samej funkcji do cechy "woda".
+
+```{r transformacje 3, echo=TRUE, eval=FALSE}
+tmp= logtrans(wytrz~log(woda),data = dt_1, alpha = seq(1,300,1)) 
+tmp$x[which.max(tmp$y)] #transformacja ma sens dla alpha = 53
+dt_1[colnames(dt_1)=="woda"]<-log(dt_1[colnames(dt_1)=="woda"]+53)
+```
+
+Stwórzmy nowy model, w którym użyjemy zmiennych po transformacjach
+
+```{r transformacje 4, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+m3_1<-lm(data = dt_1, formula = wytrz~.*.)
+par(mfrow=c(2,2))
+plot(m3_1)
+plot(m3)
+
+AIC(m3_1,m3)
+```
+
+Na wykresach nie widać znaczacej poprawy modelu po transformacjach.
+Porównanie modeli poprzez kryterium AIC pokazuje, że rzeczywiście lepsze
+wyniki może dawać m3_1.
+
+------------------------------------------------------------------------
+
+## 3.6 Korelacja zmiennych
+
+------------------------------------------------------------------------
+
+W modelu nie powinniśmy uwzględniać skorelowanyc zmiennych ponieważ będą
+one dostarczać dwa razy tej samej informacji, co nie wpłynie korzystnie
+na model
+
+Wyświetlmy macierz korelacji dla posiadanych parametrów
+
+```{r korelacja , echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+corrplot::corrplot(cor(dt),method = 'number')
+```
+
+Nasze zmienne nie są ze sobą mocno skorelowane. Jedyna mocniejsza
+korelacja występuje między superplastem a wodą. Sprawdźmy jak bedzie
+wyglądał model gdy wyrzucimy z niego jeden z predyktorów. Z
+wygenerowanego w punkcie 3.3 raportu wiemy, że superplast jest mniej
+znaczący od wody dlatego to jego usuniemy.
+
+```{r korelacja 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+dt_bez_sp<-dt[!(colnames(dt)=="super_plast")]
+
+m3_2<-lm(data = dt_bez_sp, formula = wytrz~.*.)
+summary(m3_2)
+cbind(AIC(m3_1,m3_2), BIC(m3_1,m3_2))
+```
+
+Na podstawie powyższych parametrów oceny wskazują, że nowy model wypada gorzej.
+Przyjrzyjmy sie jeszcze wykresom diagnostycznym.
+
+```{r porownanie, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+par(mfrow=c(2,2))
+plot(m3_1)
+plot(m3_2)
+```
+
+Wykres diagnostyczny modelu m3_2 wygląda trochę lepiej. Możliwe, że rozkład reszt jest bardziej zbliżone do normalnego. Sprawdźmy to testem statystycznym.
+
+```{r porownanie 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+shapiro.test(m3_1$residuals)
+shapiro.test(m3_2$residuals)
+```
+
+Test pokazuje, że reszty modelu m3_2 są bliskie normalnemu, ale normalne nie są. 
+
+Na wykresie "Residuals vs Leverage" widzimy, że występuje jedna obserwacja, która ma duży wpływ na model. Zobaczmy czy model poprawi się, gdy zostanie ona usunięta.
+
+```{r usuniecie, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+m3_2_1<-lm(data = dt_bez_sp[-67,], formula = wytrz~.*.)
+summary(m3_2_1)
+par(mfrow=c(2,2))
+plot(m3_2_1)
+cbind(AIC(m3_1,m3_2_1), BIC(m3_1,m3_2_1)) #kryteria oceny
+```
+
+Kryteria oceny w dalszym ciągu wychodzą lepsze dla m3_1, który mimo teoretycznie gorszemu rozkładuowi reszt wydaje wydaje się lepiej dopasowany a do tego ma wyższy współczynnik R^2^=0.8374.
+
+------------------------------------------------------------------------
+
+## 3.7 AIC
+
+------------------------------------------------------------------------
+
+Mając wybrany wstepny model możemy spróbować poprawic go przez AIC w algorytmie krokowym zaimplementowanym w pakiecie *MASS*.
+
+```{r AIC, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+mAIC <- stepAIC(m3_1, direction = "backward", trace = F)
+summary(mAIC)
+```
+
+model uzyskany przez *stepAIC* ma bardzo podobny współczynnik R^2^ do orginalnego modelu, ale wszystkie czynniki są znaczące. Zobaczmy wykresy diagnostyczne:
+
+```{r AIC2, echo=FALSE, message=FALSE, warning=FALSE, paged.print=TRUE}
+par(mfrow=c(2,2))
+plot(mAIC)
+```
+
+Wykresy oraz raport wskazują na to, że otrzymany model powinien byc zadowalającej jakości. Jest to najlepszy jaki udało się uzyskać.
+
+------------------------------------------------------------------------
+
+## 3.7 Leaps
+
+------------------------------------------------------------------------
+
+W naszym modelu mierzymy wiele parametrów. Zobaczmy, czy moglibyśmy uzyskać podobne wyniki zmniejszając ilość predyktorów:
+
+```{r leaps, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+mLEAPS=regsubsets(wytrz~., data=dt,nbest=2)
+plot(mLEAPS, scale = "r2")
+```
+
+Z wykresu wynika, że nie możemy usunąć żadnego z predyktorów bez pogorszenia modelu. Warto było to sprawdzić ponieważ mogło się okazać, że otrzymamy podobnej jakości model przy bez konieczności mierzenia tylu parametróW.
+
+------------------------------------------------------------------------
+
+## 3.7 Analiza reszt wybranego modelu
+
+------------------------------------------------------------------------
+
+### 3.7.1 Normalność rozkładu reszt
+
+------------------------------------------------------------------------
+
+```{r reszty, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+hist(mAIC$residuals, nclass = 18)
+shapiro.test(mAIC$residuals)
+```
+
+Test statystyczny sugeruje, że reszty nie mają rozkładu normalnego, ale patrząc na histogram możemy stwierdzić że blisko im do niego.
+
+------------------------------------------------------------------------
+
+### 3.7.2 Autokorelacja reszt
+
+------------------------------------------------------------------------
+
+```{r reszty 1, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+dwtest(mAIC)
+```
+Test wskazuje na występowanie autokorelacji reszt
+
+------------------------------------------------------------------------
+
+### 3.7.3 Jednorodność wariancji reszt
+
+------------------------------------------------------------------------
+
+```{r reszty 2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+plot(mAIC$residuals)
+bgtest(m3) 
+```
+Test wskazuje na heteroskedastyczność wariancji co pokrywa się z wykresem.
+
+------------------------------------------------------------------------
+
+### 3.7.3 Średnia z reszt
+
+------------------------------------------------------------------------
+
+```{r reszty 3, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+mean(mAIC$residuals)
+```
+Średnia z reszt modelu jest bardzo bliska 0. 
+
+
+------------------------------------------------------------------------
+
+# 4 Wnioski
+
+------------------------------------------------------------------------
+Uzyskany model nie spełnia wszystkich kryteriów dobrego modelu. Najprawdopodobniej wynika to z braku liniowej zależności między zmienną objaśnianą a poredyktorami. Mimo wszystko może on dawać zadowalające wyniki. Aby poprawić model możnaby zastosować regresję sklejaną, która pozwala na zmniejszenie przedziału stosowalności funkcji.
